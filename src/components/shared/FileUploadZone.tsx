@@ -22,7 +22,7 @@ export function FileUploadZone({
   onFilesAccepted,
   acceptedFileTypes = ".pt,.onnx,.tf,.h5,.pb,image/*,.txt,.csv,.json", // Common model and data types
   maxFiles = 5,
-  maxFileSizeMB = 50, // Max 50MB per file
+  maxFileSizeMB = 1024, // Max 1GB per file
   label = "Drag & drop files here, or click to browse",
   description,
   className,
@@ -167,7 +167,7 @@ export function FileUploadZone({
          <p id={`${id}-desc`} className="text-xs text-center text-muted-foreground">{description}</p>
       )}
       <p className="text-xs text-center text-muted-foreground mt-2">
-        Accepted: {acceptedFileTypes}. Max files: {maxFiles}. Max size: {maxFileSizeMB}MB/file.
+        Accepted: {acceptedFileTypes}. Max files: {maxFiles}. Max size: {maxFileSizeMB === 1024 ? "1GB" : `${maxFileSizeMB}MB`}/file.
       </p>
       <Button variant="link" size="sm" className="mt-2 text-primary">
         Or click to browse
