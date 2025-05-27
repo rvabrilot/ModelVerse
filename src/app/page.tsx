@@ -107,11 +107,6 @@ const formatOnnxDimensions = (dims: (number | null)[]): string => {
 const parseOnnxModel = async (file: File): Promise<ModelArchitecture> => {
   try {
     const buffer = await file.arrayBuffer();
-    // It's good practice to specify wasm paths for onnxruntime-web
-    // You might need to copy wasm files to your public directory
-    // For now, we'll rely on the default CDN behavior or hope it's bundled.
-    // ort.env.wasm.wasmPaths = '/ort-wasm-files/'; // Example path
-
     const session = await InferenceSession.create(buffer);
     
     const inputs: ModelInputOutput[] = session.inputNames.map(name => {
@@ -140,14 +135,13 @@ const parseOnnxModel = async (file: File): Promise<ModelArchitecture> => {
       {
         id: 'onnx-graph-summary',
         name: 'ONNX Model Graph',
-        type: 'ONNXGraph', // This type can be used by ModelVisualizer for specific rendering if needed
+        type: 'ONNXGraph', 
         params: { 
           inputs: session.inputNames.join(', '), 
           outputs: session.outputNames.join(', '),
           nodes: nodeCount,
           provider: session.options.executionProviders?.join(', ') || 'default',
         },
-        // For a summary layer, input/outputShape might be more conceptual (list of names)
         inputShape: inputs.map(inp => `${inp.name} (${inp.shape})`),
         outputShape: outputs.map(out => `${out.name} (${out.shape})`),
       }
@@ -155,20 +149,21 @@ const parseOnnxModel = async (file: File): Promise<ModelArchitecture> => {
 
     return {
       layers,
-      connections: [], // No detailed inter-layer connections from this basic parsing
-      inputs, // These are the detailed ModelInputOutput[]
-      outputs, // These are the detailed ModelInputOutput[]
+      connections: [], 
+      inputs, 
+      outputs, 
     };
   } catch (error) {
-    console.error("Error parsing ONNX model:", error);
-    // Provide a more user-friendly error message
-    let message = `Failed to parse ONNX model: ${(error as Error).message}. `;
-    if ((error as Error).message.includes("Unexpected token")) {
-        message += "This might be due to an invalid or corrupted ONNX file, or a version incompatibility.";
-    } else if ((error as Error).message.includes("Wasm")) {
-        message += "There might be an issue loading WebAssembly components for ONNX runtime. Check your internet connection or browser console for more details.";
+    console.error(`Error parsing ONNX model '${file.name}':`, error); 
+    const err = error as Error;
+    let userFriendlyMessage = `Details: ${err.message}.`; 
+
+    if (err.message.includes("Unexpected token") || err.message.includes("Unable to parse") || err.message.includes("format not supported") || err.message.includes("invalid model")) {
+        userFriendlyMessage = "The file appears to be invalid, corrupted, or an unsupported ONNX version. Please verify the file.";
+    } else if (err.message.includes("Wasm") || err.message.includes("WebAssembly")) {
+        userFriendlyMessage = "A component (WebAssembly) needed for ONNX processing failed to load. Check your internet connection or browser console.";
     }
-    throw new Error(message);
+    throw new Error(`Failed to parse ONNX model. ${userFriendlyMessage}`);
   }
 };
 
@@ -206,23 +201,32 @@ export default function ModelVersePage() {
       const id = `${file.name}-${Date.now()}`;
       const fileType = file.name.split('.').pop()?.toLowerCase() || 'unknown';
       let architecture: ModelArchitecture;
-      let processingMessage = "";
 
       if (fileType === 'onnx') {
         try {
           architecture = await parseOnnxModel(file);
-          processingMessage = `Successfully parsed ONNX model: ${file.name}. Input/output details extracted.`;
-           toast({ title: "ONNX Model Processed", description: processingMessage });
+          toast({ 
+            title: "ONNX Model Processed", 
+            description: `Successfully parsed ONNX model: ${file.name}. Input/output details extracted.`,
+            duration: 6000
+          });
         } catch (e) {
           const errorMessage = (e as Error).message;
-          toast({ title: "ONNX Parsing Error", description: errorMessage, variant: "destructive", duration: 8000 });
-          architecture = generateMockArchitecture(file.name, fileType); // Fallback to mock
-          processingMessage = `Failed to parse ONNX model ${file.name}. Using mock architecture. Error: ${errorMessage}`;
+          toast({ 
+            title: `ONNX Parsing Failed for ${file.name}`, 
+            description: `${errorMessage} Falling back to mock architecture.`, 
+            variant: "destructive", 
+            duration: 8000 
+          });
+          architecture = generateMockArchitecture(file.name, fileType);
         }
       } else {
         architecture = generateMockArchitecture(file.name, fileType);
-        processingMessage = `Generated mock architecture for ${file.name} (format: ${fileType}). Detailed parsing for this format is not supported client-side.`;
-         toast({ title: "Model Processed (Mock)", description: processingMessage, duration: 6000 });
+        toast({ 
+          title: "Model Processed (Mock)", 
+          description: `Generated mock architecture for ${file.name} (format: ${fileType}). Detailed client-side parsing for this format is not yet supported.`, 
+          duration: 6000 
+        });
       }
       
       return {
@@ -231,7 +235,6 @@ export default function ModelVersePage() {
         fileType,
         size: `${(file.size / (1024 * 1024)).toFixed(2)} MB`,
         architecture,
-        // rawFile: file, // Store if needed for actual processing
       };
     });
 
@@ -240,14 +243,10 @@ export default function ModelVersePage() {
       setUploadedModels(prev => [...prev, ...newModels]);
 
       if (newModels.length > 0 && !selectedModelId) {
-        setSelectedModelId(newModels[0].id); // Auto-select first uploaded model
+        setSelectedModelId(newModels[0].id); 
       }
-      // General toast after all processing is done, specific toasts are shown per model above
-      // toast({ title: "Models Processed", description: `${newModels.length} model(s) processed. Check individual notifications for details.` });
-      if (newModels.length > 0) setActiveTab("visualize"); // Switch to visualize tab
+      if (newModels.length > 0) setActiveTab("visualize"); 
     } catch (error) {
-      // This catch might be redundant if individual promises handle their errors and provide fallbacks.
-      // However, it can catch errors from Promise.all itself or unhandled rejections.
       toast({ title: "Error Processing Model Batch", description: (error as Error).message, variant: "destructive" });
     }
   };
@@ -264,7 +263,7 @@ export default function ModelVersePage() {
 
   const handleSelectModel = (modelIdToSelect: string) => {
     setSelectedModelId(modelIdToSelect);
-    setCurrentInputs(null); // Reset inputs when model changes
+    setCurrentInputs(null); 
     setActiveTab("visualize"); 
   };
   
@@ -285,10 +284,7 @@ export default function ModelVersePage() {
       toast({ title: "No Model Selected", description: "Please select a model to run.", variant: "destructive" });
       return;
     }
-    // For ONNX, inputs might be auto-detected from metadata and might not need explicit configuration for a mock run.
-    // For mock architecture, we rely on currentInputs.
     const isNonOnnxAndNoInputs = selectedModel.fileType !== 'onnx' && (!currentInputs || currentInputs.length === 0);
-    // Check if ONNX model has inputs that still need configuration (e.g., "N/A" shape from a failed parse)
     const isUnconfiguredOnnx = selectedModel.fileType === 'onnx' && selectedModel.architecture?.inputs.some(inp => inp.shape === "N/A" || inp.dtype === "N/A");
 
     if (isNonOnnxAndNoInputs || isUnconfiguredOnnx) {
