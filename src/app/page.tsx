@@ -1,3 +1,4 @@
+
 // src/app/page.tsx
 "use client";
 
@@ -12,7 +13,7 @@ import { ModelComparisonView } from "@/components/features/model-comparison/Mode
 import { UploadCloud, BrainCircuit, SlidersHorizontal, BarChartHorizontalBig, GitCompareArrows } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
-import { InferenceSession, Tensor } from 'onnxruntime-web';
+import { InferenceSession } from 'onnxruntime-web';
 
 // Mock function to generate architecture for non-ONNX files
 const generateMockArchitecture = (modelName: string, fileType: string): ModelArchitecture => {
@@ -20,8 +21,20 @@ const generateMockArchitecture = (modelName: string, fileType: string): ModelArc
   const numLayers = Math.floor(Math.random() * 4) + 2; // 2-5 layers for simplicity
   const layers: ModelLayer[] = [];
 
-  const commonInputShape = ['batch', '3', '224', '224'];
-  const commonOutputShape = ['batch', '1000']; // Example for classification
+  const inputDim1 = Math.random() > 0.5 ? 'batch' : '1';
+  const inputDimH = Math.floor(Math.random() * 100) + 128; // e.g., 128-227
+  const inputDimW = Math.floor(Math.random() * 100) + 128; // e.g., 128-227
+  const inputChannels = Math.random() > 0.3 ? '3' : '1';
+
+  const commonInputShape = [inputDim1, inputChannels, `${inputDimH}`, `${inputDimW}`];
+  // Example output: classification (10-1000 classes) or feature vector (e.g., 512)
+  const outputDim = Math.random() > 0.5 ? `${Math.floor(Math.random() * 991) + 10}` : `${Math.pow(2, Math.floor(Math.random()*4)+7)}`; // 128, 256, 512, 1024
+  const commonOutputShape = [inputDim1, outputDim]; 
+
+  const dtypes = ['float32', 'float16', 'int32', 'uint8'];
+  const inputDtype = dtypes[Math.floor(Math.random() * dtypes.length)];
+  const outputDtype = dtypes[Math.floor(Math.random() * dtypes.length)];
+
 
   const inputLayer: ModelLayer = { 
     id: `input-${idSuffix}`, 
@@ -34,15 +47,15 @@ const generateMockArchitecture = (modelName: string, fileType: string): ModelArc
 
   let prevLayer = inputLayer;
   for (let i = 0; i < numLayers; i++) {
-    const layerTypes = ['Conv2D', 'ReLU', 'MaxPool2D', 'Linear', 'BatchNorm', 'Dropout', 'Attention'];
+    const layerTypes = ['Conv2D', 'ReLU', 'MaxPool2D', 'Linear', 'BatchNorm', 'Dropout', 'Attention', 'TransformerBlock'];
     const type = layerTypes[Math.floor(Math.random() * layerTypes.length)];
     const currentLayer: ModelLayer = {
-      id: `${type.toLowerCase().replace('2d','')}-${i}-${idSuffix}`,
+      id: `${type.toLowerCase().replace('2d','').replace('block','')}--${i}-${idSuffix}`,
       name: `${type} ${i + 1}`,
       type: type,
       params: { info: `Mock parameters for ${type}`, units: Math.pow(2, Math.floor(Math.random()*5)+5) }, // e.g. 32 to 512 units
       inputShape: prevLayer.outputShape,
-      outputShape: (type === 'Linear' && i === numLayers -1 ) ? commonOutputShape : [`batch`, `features_${i+1}` , `${Math.floor(Math.random()*100)+100}`, `${Math.floor(Math.random()*100)+100}`]
+      outputShape: (type === 'Linear' && i === numLayers -1 ) ? commonOutputShape : [`batch`, `features_${i+1}` , `${Math.floor(Math.random()*100)+50}`, `${Math.floor(Math.random()*100)+50}`]
     };
     layers.push(currentLayer);
     prevLayer = currentLayer;
@@ -56,12 +69,41 @@ const generateMockArchitecture = (modelName: string, fileType: string): ModelArc
   return {
     layers,
     connections,
-    inputs: [{ name: 'input_tensor_1', shape: commonInputShape.join(','), dtype: 'float32' }],
-    outputs: [{ name: 'output_tensor_1', shape: commonOutputShape.join(','), dtype: 'float32' }],
+    inputs: [{ name: `input_tensor_${Math.floor(Math.random()*10)}`, shape: commonInputShape.join(','), dtype: inputDtype }],
+    outputs: [{ name: `output_tensor_${Math.floor(Math.random()*10)}`, shape: commonOutputShape.join(','), dtype: outputDtype }],
   };
 };
 
-// Function to parse ONNX model (simplified)
+// Helper function to map ONNX tensor type strings to simplified dtype strings
+const onnxTypeToDtype = (onnxType: string): string => {
+  if (!onnxType || !onnxType.startsWith('tensor(') || !onnxType.endsWith(')')) {
+    return 'unknown';
+  }
+  const type = onnxType.substring(7, onnxType.length - 1);
+  switch (type) {
+    case 'float': return 'float32'; // Common assumption for "float"
+    case 'double': return 'float64';
+    case 'int8': return 'int8';
+    case 'uint8': return 'uint8';
+    case 'int16': return 'int16';
+    case 'uint16': return 'uint16';
+    case 'int32': return 'int32';
+    case 'uint32': return 'uint32';
+    case 'int64': return 'int64';
+    case 'uint64': return 'uint64';
+    case 'bool': return 'bool';
+    default: return type; // Return the type itself if not a standard mapping
+  }
+};
+
+// Helper function to format ONNX dimensions array into a string
+const formatOnnxDimensions = (dims: (number | null)[]): string => {
+  if (!dims) return "N/A";
+  return dims.map(d => d === null ? 'batch' : (d < 0 ? 'dynamic' : d.toString())).join(',');
+};
+
+
+// Function to parse ONNX model
 const parseOnnxModel = async (file: File): Promise<ModelArchitecture> => {
   try {
     const buffer = await file.arrayBuffer();
@@ -72,25 +114,25 @@ const parseOnnxModel = async (file: File): Promise<ModelArchitecture> => {
 
     const session = await InferenceSession.create(buffer);
     
-    const inputs: ModelInputOutput[] = session.inputNames.map(name => ({
-      name,
-      // Shape and dtype are harder to get accurately without running or more detailed parsing.
-      // onnxruntime-web session object doesn't directly expose detailed type/shape info easily for all inputs.
-      shape: "N/A (Inspect model for details)", 
-      dtype: "N/A"
-    }));
+    const inputs: ModelInputOutput[] = session.inputNames.map(name => {
+      const meta = session.inputMetadata[name];
+      return {
+        name,
+        shape: meta ? formatOnnxDimensions(meta.dimensions) : "N/A", 
+        dtype: meta ? onnxTypeToDtype(meta.type) : "N/A"
+      };
+    });
 
-    const outputs: ModelInputOutput[] = session.outputNames.map(name => ({
-      name,
-      shape: "N/A (Inspect model for details)",
-      dtype: "N/A"
-    }));
-
-    // Attempt to get some notion of graph size, very simplified.
-    // This part is speculative as direct node list access from session isn't a standard public API feature.
-    // If session.handler or session.graph is not available or doesn't have nodes, this will be 'Unknown'.
-    // For a production scenario, a more robust ONNX parsing library (perhaps server-side) would be needed for details.
-    // @ts-ignore // Accessing internal properties for node count estimation
+    const outputs: ModelInputOutput[] = session.outputNames.map(name => {
+      const meta = session.outputMetadata[name];
+      return {
+        name,
+        shape: meta ? formatOnnxDimensions(meta.dimensions) : "N/A",
+        dtype: meta ? onnxTypeToDtype(meta.type) : "N/A"
+      };
+    });
+    
+    // @ts-ignore // Accessing internal properties for node count estimation - this might be unstable
     const nodeCount = session.handler_?.graph?.node?.length || 'Unknown';
 
 
@@ -98,26 +140,35 @@ const parseOnnxModel = async (file: File): Promise<ModelArchitecture> => {
       {
         id: 'onnx-graph-summary',
         name: 'ONNX Model Graph',
-        type: 'ONNXGraph',
+        type: 'ONNXGraph', // This type can be used by ModelVisualizer for specific rendering if needed
         params: { 
           inputs: session.inputNames.join(', '), 
           outputs: session.outputNames.join(', '),
-          nodes: nodeCount 
+          nodes: nodeCount,
+          provider: session.options.executionProviders?.join(', ') || 'default',
         },
-        inputShape: session.inputNames,
-        outputShape: session.outputNames,
+        // For a summary layer, input/outputShape might be more conceptual (list of names)
+        inputShape: inputs.map(inp => `${inp.name} (${inp.shape})`),
+        outputShape: outputs.map(out => `${out.name} (${out.shape})`),
       }
     ];
 
     return {
       layers,
-      connections: [], // Simplified, no detailed connections from this basic parsing
-      inputs,
-      outputs,
+      connections: [], // No detailed inter-layer connections from this basic parsing
+      inputs, // These are the detailed ModelInputOutput[]
+      outputs, // These are the detailed ModelInputOutput[]
     };
   } catch (error) {
     console.error("Error parsing ONNX model:", error);
-    throw new Error(`Failed to parse ONNX model: ${(error as Error).message}`);
+    // Provide a more user-friendly error message
+    let message = `Failed to parse ONNX model: ${(error as Error).message}. `;
+    if ((error as Error).message.includes("Unexpected token")) {
+        message += "This might be due to an invalid or corrupted ONNX file, or a version incompatibility.";
+    } else if ((error as Error).message.includes("Wasm")) {
+        message += "There might be an issue loading WebAssembly components for ONNX runtime. Check your internet connection or browser console for more details.";
+    }
+    throw new Error(message);
   }
 };
 
@@ -128,10 +179,10 @@ const generateMockOutput = (modelId: string, inputs?: ConfiguredInput[]): ModelO
   const randomType = outputTypes[Math.floor(Math.random() * outputTypes.length)];
   let data: any;
   switch (randomType) {
-    case 'text': data = `Mock text output for model ${modelId.substring(0,5)} with inputs: ${inputs ? inputs.map(i=>i.inputName).join(', ') : 'N/A'}. Lorem ipsum dolor sit amet.`; break;
+    case 'text': data = `Mock text output for model ${modelId.substring(0,5)} with inputs: ${inputs ? inputs.map(i=>i.inputName).join(', ') : 'N/A'}. Lorem ipsum dolor sit amet, consectetur adipiscing elit.`; break;
     case 'image': data = `https://placehold.co/600x400.png?text=Output+${modelId.substring(0,5)}`; break;
-    case 'vector': data = Array.from({ length: Math.floor(Math.random() * 5) + 3 }, () => parseFloat(Math.random().toFixed(4))); break; // 3-7 elements
-    case 'json': data = { prediction: Math.random().toFixed(4), confidence: Math.random().toFixed(2), class: `class_${Math.floor(Math.random()*10)}`}; break;
+    case 'vector': data = Array.from({ length: Math.floor(Math.random() * 8) + 3 }, () => parseFloat(Math.random().toFixed(4))); break; // 3-10 elements
+    case 'json': data = { prediction: Math.random().toFixed(4), confidence: Math.random().toFixed(2), class: `class_${Math.floor(Math.random()*20)}`, details: { info: "Mock JSON content", timestamp: Date.now()} }; break;
     default: data = "Unknown output type";
   }
   return { type: randomType, data, modelId };
@@ -160,15 +211,18 @@ export default function ModelVersePage() {
       if (fileType === 'onnx') {
         try {
           architecture = await parseOnnxModel(file);
-          processingMessage = `Successfully parsed ONNX model: ${file.name}. Basic input/output info extracted.`;
+          processingMessage = `Successfully parsed ONNX model: ${file.name}. Input/output details extracted.`;
+           toast({ title: "ONNX Model Processed", description: processingMessage });
         } catch (e) {
-          toast({ title: "ONNX Parsing Error", description: (e as Error).message, variant: "destructive" });
+          const errorMessage = (e as Error).message;
+          toast({ title: "ONNX Parsing Error", description: errorMessage, variant: "destructive", duration: 8000 });
           architecture = generateMockArchitecture(file.name, fileType); // Fallback to mock
-          processingMessage = `Failed to parse ONNX model ${file.name}. Using mock architecture. Error: ${(e as Error).message}`;
+          processingMessage = `Failed to parse ONNX model ${file.name}. Using mock architecture. Error: ${errorMessage}`;
         }
       } else {
         architecture = generateMockArchitecture(file.name, fileType);
-        processingMessage = `Generated mock architecture for ${file.name}.`;
+        processingMessage = `Generated mock architecture for ${file.name} (format: ${fileType}). Detailed parsing for this format is not supported client-side.`;
+         toast({ title: "Model Processed (Mock)", description: processingMessage, duration: 6000 });
       }
       
       return {
@@ -188,10 +242,13 @@ export default function ModelVersePage() {
       if (newModels.length > 0 && !selectedModelId) {
         setSelectedModelId(newModels[0].id); // Auto-select first uploaded model
       }
-      toast({ title: "Models Processed", description: `${newModels.length} model(s) processed. Check details for parsing status.` });
+      // General toast after all processing is done, specific toasts are shown per model above
+      // toast({ title: "Models Processed", description: `${newModels.length} model(s) processed. Check individual notifications for details.` });
       if (newModels.length > 0) setActiveTab("visualize"); // Switch to visualize tab
     } catch (error) {
-      toast({ title: "Error Processing Models", description: (error as Error).message, variant: "destructive" });
+      // This catch might be redundant if individual promises handle their errors and provide fallbacks.
+      // However, it can catch errors from Promise.all itself or unhandled rejections.
+      toast({ title: "Error Processing Model Batch", description: (error as Error).message, variant: "destructive" });
     }
   };
 
@@ -202,7 +259,7 @@ export default function ModelVersePage() {
       setCurrentInputs(null);
       setModelOutputs(prev => ({...prev, [modelIdToRemove]: null}));
     }
-    toast({ title: "Model Removed", description: `Model with ID ${modelIdToRemove.substring(0,8)} removed.` });
+    toast({ title: "Model Removed", description: `Model ${modelIdToRemove.substring(0,15)}... removed.` });
   };
 
   const handleSelectModel = (modelIdToSelect: string) => {
@@ -228,15 +285,18 @@ export default function ModelVersePage() {
       toast({ title: "No Model Selected", description: "Please select a model to run.", variant: "destructive" });
       return;
     }
-    if (!currentInputs || currentInputs.length === 0) {
-      // For ONNX models, inputs might be auto-detected, but we still rely on configuration for mock run
-      const isConfigNeeded = !selectedModel.architecture?.inputs?.every(inp => inp.shape !== "N/A (Inspect model for details)");
-      if (isConfigNeeded) {
-        toast({ title: "Inputs Not Configured", description: `Please configure inputs for ${selectedModel.name} first.`, variant: "destructive" });
-        setActiveTab("configure");
-        return;
-      }
+    // For ONNX, inputs might be auto-detected from metadata and might not need explicit configuration for a mock run.
+    // For mock architecture, we rely on currentInputs.
+    const isNonOnnxAndNoInputs = selectedModel.fileType !== 'onnx' && (!currentInputs || currentInputs.length === 0);
+    // Check if ONNX model has inputs that still need configuration (e.g., "N/A" shape from a failed parse)
+    const isUnconfiguredOnnx = selectedModel.fileType === 'onnx' && selectedModel.architecture?.inputs.some(inp => inp.shape === "N/A" || inp.dtype === "N/A");
+
+    if (isNonOnnxAndNoInputs || isUnconfiguredOnnx) {
+       toast({ title: "Inputs Not Fully Configured", description: `Please ensure inputs for ${selectedModel.name} are configured or resolved.`, variant: "destructive" });
+       setActiveTab("configure");
+       return;
     }
+
     const newOutput = generateMockOutput(selectedModel.id, currentInputs || []);
     setModelOutputs(prev => ({ ...prev, [selectedModel.id!]: newOutput }));
     toast({ title: "Model Simulation Run", description: `Mock output generated for ${selectedModel.name}.` });
@@ -261,7 +321,7 @@ export default function ModelVersePage() {
     ), disabled: !selectedModel },
     { value: "output", label: "View Output", icon: BarChartHorizontalBig, content: (
       <>
-        {selectedModel && (currentInputs || selectedModel.fileType === 'onnx') && ( // Allow re-run for ONNX even if inputs were auto-detected
+        {selectedModel && (currentInputs || selectedModel.fileType === 'onnx') && ( 
            <Button onClick={handleRunModel} className="mb-4">Re-run Simulation with Current Inputs</Button>
         )}
         <OutputDisplay output={selectedModel ? modelOutputs[selectedModel.id] : null} modelName={selectedModel?.name} />
@@ -292,3 +352,5 @@ export default function ModelVersePage() {
     </div>
   );
 }
+
+    
