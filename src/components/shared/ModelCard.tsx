@@ -2,6 +2,7 @@ import type { AiModel } from '@/types';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { XIcon, FileText, Database, BrainCircuit } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
 interface ModelCardProps {
   model: AiModel;
